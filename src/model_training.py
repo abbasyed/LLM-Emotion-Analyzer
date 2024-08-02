@@ -1,184 +1,156 @@
 import pandas as pd
 import torch
-from torch.utils.data import DataLoader, TensorDataset, RandomSampler, SequentialSampler
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, AdamW
-from transformers import get_linear_schedule_with_warmup
-import numpy as np
-from sklearn.metrics import classification_report, confusion_matrix
-from imblearn.over_sampling import RandomOverSampler
-from sklearn.model_selection import ParameterSampler
-import math
+from torch.utils.data import DataLoader, Dataset
+from transformers import DistilBertForSequenceClassification, AdamW
 
-def load_data():
-    X_train = pd.read_csv('../data/X_train.csv').values
-    X_val = pd.read_csv('../data/X_val.csv').values
-    X_test = pd.read_csv('../data/X_test.csv').values
-    y_train = pd.read_csv('../data/y_train.csv').values.flatten()
-    y_val = pd.read_csv('../data/y_val.csv').values.flatten()
-    y_test = pd.read_csv('../data/y_test.csv').values.flatten()
-    attention_masks_train = pd.read_csv('../data/attention_masks_train.csv').values
-    attention_masks_val = pd.read_csv('../data/attention_masks_val.csv').values
-    attention_masks_test = pd.read_csv('../data/attention_masks_test.csv').values
+# Paths to your tokenized data files
+paths = {
+    'X_train': '/Users/abbassyed/PycharmProjects/LLM-Emotion-Analyzer/data/X_train.csv',
+    'attention_masks_train': '/Users/abbassyed/PycharmProjects/LLM-Emotion-Analyzer/data/attention_masks_train.csv',
+    'y_train': '/Users/abbassyed/PycharmProjects/LLM-Emotion-Analyzer/data/y_train.csv',
+    'X_val': '/Users/abbassyed/PycharmProjects/LLM-Emotion-Analyzer/data/X_val.csv',
+    'attention_masks_val': '/Users/abbassyed/PycharmProjects/LLM-Emotion-Analyzer/data/attention_masks_val.csv',
+    'y_val': '/Users/abbassyed/PycharmProjects/LLM-Emotion-Analyzer/data/y_val.csv',
+    'X_test': '/Users/abbassyed/PycharmProjects/LLM-Emotion-Analyzer/data/X_test.csv',
+    'attention_masks_test': '/Users/abbassyed/PycharmProjects/LLM-Emotion-Analyzer/data/attention_masks_test.csv',
+    'y_test': '/Users/abbassyed/PycharmProjects/LLM-Emotion-Analyzer/data/y_test.csv'
+}
 
-    y_train = pd.Series(y_train).dropna().values
-    y_val = pd.Series(y_val).dropna().values
-    y_test = pd.Series(y_test).dropna().values
+# Load the tokenized data
+X_train = pd.read_csv(paths['X_train'], header=None)
+attention_masks_train = pd.read_csv(paths['attention_masks_train'], header=None)
+y_train = pd.read_csv(paths['y_train'], header=None)
 
-    print(f"Lengths: X_train={len(X_train)}, y_train={len(y_train)}, attention_masks_train={len(attention_masks_train)}")
-    print(f"Lengths: X_val={len(X_val)}, y_val={len(y_val)}, attention_masks_val={len(attention_masks_val)}")
-    print(f"Lengths: X_test={len(X_test)}, y_test={len(y_test)}, attention_masks_test={len(attention_masks_test)}")
+X_val = pd.read_csv(paths['X_val'], header=None)
+attention_masks_val = pd.read_csv(paths['attention_masks_val'], header=None)
+y_val = pd.read_csv(paths['y_val'], header=None)
 
-    return X_train, X_val, X_test, y_train, y_val, y_test, attention_masks_train, attention_masks_val, attention_masks_test
+X_test = pd.read_csv(paths['X_test'], header=None)
+attention_masks_test = pd.read_csv(paths['attention_masks_test'], header=None)
+y_test = pd.read_csv(paths['y_test'], header=None)
 
-def balance_data(X_train, y_train, attention_masks_train):
-    ros = RandomOverSampler(random_state=42)
-    X_resampled, y_resampled = ros.fit_resample(X_train, y_train)
-    attention_masks_resampled, _ = ros.fit_resample(attention_masks_train, y_train)
-    return X_resampled, y_resampled, attention_masks_resampled
+# Debugging: Print sample data
+print("Sample input_ids:", X_train.iloc[0].values)
+print("Sample attention_mask:", attention_masks_train.iloc[0].values)
+print("Sample label:", y_train.iloc[0].values)
 
-def train_incremental(X_train, y_train, attention_masks_train, X_val, y_val, attention_masks_val, params, model, optimizer, scheduler, batch_size, device, epochs):
-    train_inputs = torch.tensor(X_train)
-    validation_inputs = torch.tensor(X_val)
-    train_labels = torch.tensor(y_train).long()
-    validation_labels = torch.tensor(y_val).long()
-    attention_masks_train = torch.tensor(attention_masks_train)
-    attention_masks_val = torch.tensor(attention_masks_val)
 
-    train_data = TensorDataset(train_inputs, attention_masks_train, train_labels)
-    train_sampler = RandomSampler(train_data)
-    train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=batch_size)
+# Create Custom Dataset Class
+class CustomDataset(Dataset):
+    def __init__(self, encodings, attention_masks, labels):
+        self.encodings = encodings
+        self.attention_masks = attention_masks
+        self.labels = labels
 
-    validation_data = TensorDataset(validation_inputs, attention_masks_val, validation_labels)
-    validation_sampler = SequentialSampler(validation_data)
-    validation_dataloader = DataLoader(validation_data, sampler=validation_sampler, batch_size=batch_size)
+    def __getitem__(self, idx):
+        item = {
+            'input_ids': torch.tensor(self.encodings.iloc[idx].values),
+            'attention_mask': torch.tensor(self.attention_masks.iloc[idx].values),
+            'labels': torch.tensor(self.labels.iloc[idx].values)
+        }
+        return item
 
-    # Calculate number of batches per epoch
-    num_batches = math.ceil(len(X_train) / batch_size)
-    print(f"Number of batches per epoch: {num_batches}")
+    def __len__(self):
+        return len(self.labels)
 
-    best_val_accuracy = 0
-    scaler = torch.cuda.amp.GradScaler()
 
-    for epoch in range(epochs):
-        model.train()
-        for step, batch in enumerate(train_dataloader):
-            batch_inputs = batch[0].to(device)
-            batch_masks = batch[1].to(device)
-            batch_labels = batch[2].to(device)
+# Create datasets
+train_dataset = CustomDataset(X_train, attention_masks_train, y_train)
+val_dataset = CustomDataset(X_val, attention_masks_val, y_val)
+test_dataset = CustomDataset(X_test, attention_masks_test, y_test)
 
-            model.zero_grad()
-            with torch.cuda.amp.autocast():
-                outputs = model(batch_inputs, attention_mask=batch_masks, labels=batch_labels)
-                loss = outputs.loss
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-            scheduler.step()
+# Create DataLoaders
+train_dataloader = DataLoader(train_dataset, batch_size=8, shuffle=True)
+val_dataloader = DataLoader(val_dataset, batch_size=8, shuffle=False)
+test_dataloader = DataLoader(test_dataset, batch_size=8, shuffle=False)
 
-        model.eval()
-        eval_accuracy = 0
-        nb_eval_steps = 0
-        preds, true_labels = [], []
+# Debugging: Print first batch
+for batch in train_dataloader:
+    print("First batch:", batch)
+    break
 
-        for batch in validation_dataloader:
-            batch_inputs = batch[0].to(device)
-            batch_masks = batch[1].to(device)
-            batch_labels = batch[2].to(device)
+# Load the model from the local directory
+model_dir = '/Users/abbassyed/distilbert-base-uncased'
+model = DistilBertForSequenceClassification.from_pretrained(model_dir, num_labels=6)
 
-            with torch.no_grad():
-                outputs = model(batch_inputs, attention_mask=batch_masks)
+# Training setup
+device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+model.to(device)
+optimizer = AdamW(model.parameters(), lr=1e-6)  # Adjusted learning rate
 
-            logits = outputs.logits
-            logits = logits.detach().cpu().numpy()
-            label_ids = batch_labels.to('cpu').numpy()
+# Initialize best validation loss to a high value
+best_val_loss = float('inf')
 
-            preds.extend(np.argmax(logits, axis=1))
-            true_labels.extend(label_ids)
+# Training loop
+model.train()
+for epoch in range(3):  # Training for 3 epochs
+    for batch in train_dataloader:
+        optimizer.zero_grad()
+        input_ids = batch['input_ids'].to(device)
+        attention_mask = batch['attention_mask'].to(device)
+        labels = batch['labels'].to(device)
+        outputs = model(input_ids, attention_mask=attention_mask, labels=labels)
 
-            eval_accuracy += np.sum(np.argmax(logits, axis=1) == label_ids)
-            nb_eval_steps += 1
+        # Calculate loss and update model parameters
+        loss = outputs.loss
+        loss.backward()
+        optimizer.step()
 
-        avg_val_accuracy = eval_accuracy / nb_eval_steps
-        print(f"Validation accuracy for epoch {epoch + 1}: {avg_val_accuracy}")
-
-        if avg_val_accuracy > best_val_accuracy:
-            best_val_accuracy = avg_val_accuracy
-            best_model_state = model.state_dict()
-
-    model.load_state_dict(best_model_state)
-    return best_val_accuracy, model
-
-def random_search(X_train, y_train, attention_masks_train, X_val, y_val, attention_masks_val, n_iter=10):
-    param_grid = {
-        'batch_size': [16, 32],
-        'learning_rate': [2e-5, 3e-5, 5e-5],
-        'epochs': [3, 4, 5]
-    }
-
-    param_list = list(ParameterSampler(param_grid, n_iter=n_iter, random_state=42))
-    best_accuracy = 0
-    best_params = {}
-    best_model = None
-
-    for params in param_list:
-        device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-        model = AutoModelForSequenceClassification.from_pretrained("microsoft/MiniLM-L12-H384-uncased", num_labels=6)
-        model.to(device)
-
-        optimizer = AdamW(model.parameters(), lr=params['learning_rate'], eps=1e-8)
-        total_steps = len(X_train) // params['batch_size'] * params['epochs']
-        scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0, num_training_steps=total_steps)
-
-        accuracy, model = train_incremental(X_train, y_train, attention_masks_train, X_val, y_val, attention_masks_val, params, model, optimizer, scheduler, params['batch_size'], device, params['epochs'])
-        if accuracy > best_accuracy:
-            best_accuracy = accuracy
-            best_params = params
-            best_model = model
-
-    return best_accuracy, best_params, best_model
-
-def evaluate_model(model, X_val, y_val, attention_masks_val):
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-    model.to(device)
-
-    validation_inputs = torch.tensor(X_val).to(device)
-    validation_labels = torch.tensor(y_val).long().to(device)
-    attention_masks_val = torch.tensor(attention_masks_val).to(device)
-
-    validation_data = TensorDataset(validation_inputs, attention_masks_val, validation_labels)
-    validation_sampler = SequentialSampler(validation_data)
-    validation_dataloader = DataLoader(validation_data, sampler=validation_sampler, batch_size=32)
-
+    # Validation loop with corrected accuracy calculation
     model.eval()
-    preds, true_labels = [], []
+    total_eval_loss = 0
+    total_eval_accuracy = 0
 
-    for batch in validation_dataloader:
-        batch_inputs = batch[0].to(device)
-        batch_masks = batch[1].to(device)
-        batch_labels = batch[2].to(device)
+    with torch.no_grad():
+        for batch in val_dataloader:
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['labels'].to(device)
+            outputs = model(input_ids, attention_mask=attention_mask, labels=labels)
 
-        with torch.no_grad():
-            outputs = model(batch_inputs, attention_mask=batch_masks)
+            # Calculate validation loss
+            loss = outputs.loss
+            total_eval_loss += loss.item()
+
+            # Calculate validation accuracy
+            logits = outputs.logits
+            predictions = torch.argmax(logits, dim=-1)
+            correct_predictions = (predictions == labels).sum().item()
+            total_eval_accuracy += correct_predictions
+
+    # Calculate average validation loss
+    avg_val_loss = total_eval_loss / len(val_dataloader)
+
+    # Calculate average validation accuracy as a percentage
+    avg_val_accuracy = total_eval_accuracy / len(y_val) * 100
+
+    print(f"Epoch {epoch + 1}")
+    print(f"Validation Loss: {avg_val_loss}")
+    print(f"Validation Accuracy: {avg_val_accuracy}%")
+
+    # Save the best model
+    if avg_val_loss < best_val_loss:
+        best_val_loss = avg_val_loss
+        torch.save(model.state_dict(), 'best_model_state.bin')
+        print("Best model saved!")
+
+    model.train()  # Back to training mode
+
+# Optionally, evaluate on the test dataset
+model.eval()
+total_test_accuracy = 0
+
+with torch.no_grad():
+    for batch in test_dataloader:
+        input_ids = batch['input_ids'].to(device)
+        attention_mask = batch['attention_mask'].to(device)
+        labels = batch['labels'].to(device)
+        outputs = model(input_ids, attention_mask=attention_mask, labels=labels)
 
         logits = outputs.logits
-        logits = logits.detach().cpu().numpy()
-        label_ids = batch_labels.to('cpu').numpy()
+        predictions = torch.argmax(logits, dim=-1)
+        correct_predictions = (predictions == labels).sum().item()
+        total_test_accuracy += correct_predictions
 
-        preds.extend(np.argmax(logits, axis=1))
-        true_labels.extend(label_ids)
-
-    print("Classification Report:\n", classification_report(true_labels, preds, target_names=['joy', 'love', 'anger', 'fear', 'surprise', 'other']))
-
-    cm = confusion_matrix(true_labels, preds)
-    print("Confusion Matrix:\n", cm)
-
-if __name__ == "__main__":
-    X_train, X_val, X_test, y_train, y_val, y_test, attention_masks_train, attention_masks_val, attention_masks_test = load_data()
-
-    best_accuracy, best_params, best_model = random_search(X_train, y_train, attention_masks_train, X_val, y_val, attention_masks_val, n_iter=5)
-    print(f"Best accuracy: {best_accuracy}")
-    print(f"Best parameters: {best_params}")
-
-    evaluate_model(best_model, X_val, y_val, attention_masks_val)
-
-    torch.save(best_model.state_dict(), "best_model.pt")
+avg_test_accuracy = total_test_accuracy / len(y_test) * 100
+print(f"Test Accuracy: {avg_test_accuracy}%")
