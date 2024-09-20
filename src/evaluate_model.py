@@ -1,5 +1,6 @@
 import torch
 from transformers import DistilBertTokenizer, DistilBertForSequenceClassification
+import streamlit as st
 
 # Load the tokenizer and the trained model state
 model_dir = '/Users/abbassyed/distilbert-base-uncased'
@@ -12,9 +13,8 @@ model.eval()
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 model.to(device)
 
-# Emotion label mapping including neutral
+# Emotion label mapping
 label_map = {0: "Neutral", 1: "Joy", 2: "Love", 3: "Anger", 4: "Fear", 5: "Surprise"}
-
 
 # Function to predict the emotion for a given prompt
 def predict_emotion(prompt):
@@ -27,17 +27,13 @@ def predict_emotion(prompt):
     # Map predicted label to emotion
     return label_map.get(predicted_label, "Unknown")
 
+# Streamlit app
+st.title("Emotion Analyzer")
 
-# Interactive loop to input prompts and get predictions
-def main():
-    while True:
-        prompt = input("Enter a prompt (or type 'exit' to quit): ")
-        if prompt.lower() == 'exit':
-            break
-        predicted_emotion = predict_emotion(prompt)
-        print(f"Predicted Emotion: {predicted_emotion}")
-        print("-" * 30)
+# User input
+user_input = st.text_input("Enter a sentence to analyze the emotion:")
 
-
-if __name__ == "__main__":
-    main()
+if user_input:
+    # Predict emotion
+    predicted_emotion = predict_emotion(user_input)
+    st.write(f"Predicted Emotion: {predicted_emotion}")
