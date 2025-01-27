@@ -16,6 +16,7 @@ model.to(device)
 # Emotion label mapping
 label_map = {0: "Neutral", 1: "Joy", 2: "Love", 3: "Anger", 4: "Fear", 5: "Surprise"}
 
+
 # Function to predict the emotion for a given prompt
 def predict_emotion(prompt):
     inputs = tokenizer(prompt, return_tensors="pt", truncation=True, padding=True, max_length=512).to(device)
@@ -26,6 +27,7 @@ def predict_emotion(prompt):
 
     # Map predicted label to emotion
     return label_map.get(predicted_label, "Unknown")
+
 
 # Streamlit app
 st.title("Emotion Analyzer")
