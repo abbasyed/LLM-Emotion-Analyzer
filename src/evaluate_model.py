@@ -1,12 +1,20 @@
 import torch
 from transformers import DistilBertTokenizer, DistilBertForSequenceClassification
 import streamlit as st
+import os
 
 # Load the tokenizer and the trained model state
-model_dir = '/Users/abbassyed/distilbert-base-uncased'
-tokenizer = DistilBertTokenizer.from_pretrained(model_dir)
-model = DistilBertForSequenceClassification.from_pretrained(model_dir, num_labels=6)
-model.load_state_dict(torch.load('best_model_state.bin'))
+# Use Hugging Face model hub instead of local path for cloud deployment
+model_name = 'distilbert-base-uncased'
+tokenizer = DistilBertTokenizer.from_pretrained(model_name)
+model = DistilBertForSequenceClassification.from_pretrained(model_name, num_labels=6)
+
+# Load the fine-tuned weights
+# Get the directory where this script is located
+script_dir = os.path.dirname(os.path.abspath(__file__))
+model_path = os.path.join(script_dir, 'best_model_state.bin')
+
+model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
 model.eval()
 
 # Device setup
