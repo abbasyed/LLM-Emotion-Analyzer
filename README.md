@@ -2,6 +2,12 @@
 
 A deep learning-based emotion analyzer that uses DistilBERT to classify text into six emotion categories: Neutral, Joy, Love, Anger, Fear, and Surprise.
 
+## Live Demo
+
+**Try it now:** [https://llm-emotion-analyzer-3x2jsogrgsk6yedqjqwymt.streamlit.app/](https://llm-emotion-analyzer-3x2jsogrgsk6yedqjqwymt.streamlit.app/)
+
+The app is deployed on Streamlit Community Cloud and is free to use. Simply enter any text and get instant emotion predictions!
+
 ## Overview
 
 This project implements a fine-tuned DistilBERT model for emotion classification from text. It includes a complete pipeline from data preprocessing to model training and an interactive web interface for real-time emotion prediction.
